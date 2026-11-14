@@ -1,0 +1,4 @@
+# .gitattributes (2026-11-13): store every file byte for byte, with no line-ending conversion.
+# Some scripts here end lines with CRLF and others with LF, and the hashes of tests/jointgam_lib.R and
+# tests/hetero_common.R key saved caches. Letting git rewrite line endings on checkout would change them.
+* -text

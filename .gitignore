@@ -1,0 +1,138 @@
+# .gitignore -- an ALLOWLIST (2026-11-13). Everything is ignored unless a line below brings it back.
+#
+# Why an allowlist: data/ holds credentialed MIMIC-IV and eICU files under a PhysioNet data use agreement,
+# and _targets/, out/, notebooks/ and paper/_local_credentialed_do_not_publish/ hold objects and tables
+# built from them. With an allowlist, a new file or folder stays private until it is named here.
+#
+# How it reads: `/*` ignores everything at the top level, and `!path` brings a path back. Git never looks
+# inside an ignored folder, so to publish some files of a folder, bring the folder back, ignore its contents
+# (`/folder/*`), then bring those files back. Before every commit, run `Rscript tests/release_check.R`.
+
+/*
+
+# --- top level
+!/.gitignore
+!/.gitattributes
+!/LICENSE
+!/README.md
+!/_targets.R
+
+# --- the pipeline library and its configs
+!/R/
+!/config/
+
+# --- runners (run/attribution.R makes runs the paper does not cite)
+!/run/
+/run/*
+!/run/internal.R
+!/run/test_look.R
+!/run/external.R
+!/run/patient_card.R
+!/run/reproduce.R
+
+# --- the EBM comparator
+!/python/
+/python/*
+!/python/ebm_fit.py
+!/python/requirements-ebm.txt
+
+# --- extraction queries only; the audit queries, archived versions, notes and audit outputs stay private
+!/sql/
+/sql/*
+!/sql/mimiciv/
+/sql/mimiciv/*
+!/sql/mimiciv/v2_0*.sql
+!/sql/eicu/
+/sql/eicu/*
+!/sql/eicu/v2_0*.sql
+!/sql/eicu_demo/
+/sql/eicu_demo/*
+!/sql/eicu_demo/v2_0*.sql
+!/sql/eicu_demo/make_demo_sql.py
+
+# --- tests/: the scripts behind the paper's runs, their helpers, the checks and the checks' fixtures
+!/tests/
+/tests/*
+!/tests/release_check.R
+!/tests/attr_bands.R
+!/tests/attr_bold_agreement.R
+!/tests/attr_eval_unit.R
+!/tests/attr_external.R
+!/tests/attr_external_bags.R
+!/tests/attr_external_common.R
+!/tests/attr_metrics.R
+!/tests/attr_replicates.R
+!/tests/bold_values_replicates.R
+!/tests/channel_semantics.R
+!/tests/comparator_calibration.R
+!/tests/concurvity_null.R
+!/tests/ebm_export.R
+!/tests/ebm_score.R
+!/tests/ebm_strata_bins.R
+!/tests/external_runner_unit.R
+!/tests/gam_qc.R
+!/tests/gam_qc_common.R
+!/tests/hetero_assemble.R
+!/tests/hetero_bold_vs_score.R
+!/tests/hetero_card_flags.R
+!/tests/hetero_common.R
+!/tests/hetero_oof_terms.R
+!/tests/hetero_quartile_lift.R
+!/tests/jointgam.R
+!/tests/jointgam_atlas.R
+!/tests/jointgam_copies.R
+!/tests/jointgam_lib.R
+!/tests/jointgam_redundancy.R
+!/tests/jointgam_shape_compare.R
+!/tests/lambda_binom_check.R
+!/tests/missing_subgroups.R
+!/tests/rv_assumptions_summary.R
+!/tests/score_centered_strata.R
+!/tests/smoke.R
+!/tests/stab_card_marks.R
+!/tests/stab_ladder_gen.R
+!/tests/stab_ladder_metrics.R
+!/tests/stab_ladder_strata.R
+!/tests/stay_table.R
+!/tests/strata_auroc_decomposition.R
+!/tests/strata_reporting.R
+# checks
+!/tests/attribution_smoke.R
+!/tests/audit_all.R
+!/tests/audit_common.R
+!/tests/audit_a_invalidation.R
+!/tests/audit_b_config.R
+!/tests/audit_c_targets.R
+!/tests/audit_d_columns.R
+!/tests/audit_e_fitsettings.R
+!/tests/formula_review.R
+!/tests/invariance_suite.R
+!/tests/refactor_identity.R
+!/tests/run_compare.R
+# fixtures the checks read (config and target names; 16-character hashes)
+!/tests/audit_a_expected.csv
+!/tests/invariance_determinism_snapshot.csv
+
+# --- paper/: the figure and table scripts, and the empty folders they write into
+!/paper/
+/paper/*
+!/paper/domain_order.R
+!/paper/make_anchor_n.R
+!/paper/make_anchored_curves.R
+!/paper/make_atlas.R
+!/paper/make_card_figure.R
+!/paper/make_figure_coefs.R
+!/paper/make_flattening_figure.R
+!/paper/make_ladder_figure.R
+!/paper/make_prior_dominance.R
+!/paper/make_results_figures.R
+!/paper/make_sodium_draws_figure.R
+!/paper/make_strata_figure.R
+!/paper/make_withinclass_table.R
+!/paper/figs/
+/paper/figs/*
+!/paper/figs/.gitkeep
+!/paper/figs/F14_patient_card_high.png
+!/paper/tables/
+/paper/tables/*
+!/paper/tables/.gitkeep

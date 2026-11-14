@@ -1,0 +1,487 @@
+# config/reproduce.yml -- the steps that reproduce the paper, read by run/reproduce.R (2026-11-13).
+#
+# Runner config, like config/internal.yml: it changes no fitted design. Each step runs one or more commands
+# in order. A command is a string split on spaces; its first word names an interpreter below, the rest are
+# its arguments. `{id}` in an argument or a config value is replaced by the run directory step `id` created
+# in this chain (or bound with --bind). `prefix` is the run-directory prefix the step creates under the run
+# root of R/11_run.R; exactly one new directory with it must appear across the step's commands, and later
+# commands of the same step may already use `{its own id}`. `configs` are applied after the commands: each
+# sets one key of a runner config file to a value, keeping the file's comments; run/reproduce.R backs the
+# file up once and --restore-configs puts it back. `needs` names earlier steps whose output this step reads
+# without a placeholder: the targets store (internal), the bundle path in the runner configs (internal), and
+# the caches out/cache/ebm, out/cache/jointgam and paper/figs/coefs. The driver orders nothing by `needs` (the
+# list order does that); it says so when a partial selection skips one. `cited` names the runs the paper
+# cites, for comparison with tests/run_compare.R. Consumers of one producer cite different generations of
+# it (the internal, test and external runs of 2026-09 and of 2026-10-25), so a chain cannot stand in for
+# the cited runs step by step; --bind names an upstream run explicitly.
+#
+# Tiers: checks (smoke.R loads the MIMIC-IV tables), core, comparators, heterogeneity, reproducibility (long), figures.
+
+state_dir: out/reproduce          # driver state, logs and config backups; never read by the pipeline
+
+interpreters:
+  R:        {exe: ""}                                         # "": the Rscript of the R running the driver
+  openblas: {exe: out/cache/tools/R-4.5.2-openblas/bin/Rscript.exe, env: {OPENBLAS_NUM_THREADS: "2"}}
+  python:   {exe: .venv-ebm/Scripts/python.exe, args: [-I]}   # python/requirements-ebm.txt; bin/python off Windows
+
+steps:
+
+  # ---------------------------------------------------------------- checks
+  - id: smoke
+    tier: checks
+    run:
+      - R tests/smoke.R
+  - id: attr_eval_unit
+    tier: checks
+    run:
+      - R tests/attr_eval_unit.R
+  - id: external_runner_unit
+    tier: checks
+    run:
+      - R tests/external_runner_unit.R
+
+  # ---------------------------------------------------------------- core
+  - id: internal
+    tier: core
+    prefix: internal
+    run:
+      - R run/internal.R
+    configs:
+      - {file: config/internal.yml,      key: test_look.bundle, value: "{internal}/bundle.qs2"}
+      - {file: config/external.yml,      key: bundle,           value: "{internal}/bundle.qs2"}
+      - {file: config/external_demo.yml, key: bundle,           value: "{internal}/bundle.qs2"}
+      - {file: config/gam_qc.yml,        key: bundle,           value: "{internal}/bundle.qs2"}
+    cited: [internal_20260909T112643, internal_20261025T211111]
+    note: tar_make() and the bundle; the current code gives the 2026-10-25 severity cut points (author, 2026-11-13)
+  - id: test
+    tier: core
+    needs: [internal]
+    prefix: test
+    run:
+      - R run/test_look.R
+    cited: [test_20260912T215546, test_20261025T211320]
+    note: the held-out MIMIC-IV test set, scored once per chain; it informs no design choice
+  - id: external
+    tier: core
+    needs: [internal]
+    prefix: external
+    run:
+      - R run/external.R
+    cited: [external_20260909T112824, external_20261025T211621]
+    note: needs the credentialed eICU tables named in config/external.yml
+  - id: concurvity_null
+    tier: core
+    prefix: cnull
+    run:
+      - R tests/concurvity_null.R
+    configs:
+      - {file: config/gam_qc.yml, key: concurvity_null, value: "{concurvity_null}"}
+    cited: [cnull_20261026T013842]
+  - id: gam_qc
+    tier: core
+    needs: [internal, concurvity_null]
+    prefix: gamqc
+    run:
+      - R tests/gam_qc.R --external {external}
+    cited: [gamqc_20260909T180107, gamqc_20261026T052604]
+  - id: fig_coefs
+    tier: core
+    needs: [internal]
+    run:
+      - R paper/make_figure_coefs.R
+    note: paper/figs/coefs/parametric_coefs.csv
+  - id: fig_anchor_n
+    tier: core
+    needs: [internal]
+    run:
+      - R paper/make_anchor_n.R
+    note: paper/figs/coefs/anchor_n.csv, read by the card
+  - id: fig_anchored_curves
+    tier: core
+    needs: [internal, fig_anchor_n]
+    run:
+      - R paper/make_anchored_curves.R --gamqc {gam_qc}
+    note: paper/figs/coefs/anchored_curves.rds, read by the card, both atlases and F28/F29
+  - id: channel_semantics
+    tier: core
+    prefix: chansem
+    run:
+      - R tests/channel_semantics.R --internal {internal} --external {external}
+    cited: [chansem_20260914T084935]
+  - id: card
+    tier: core
+    needs: [internal, fig_anchor_n]
+    prefix: card
+    run:
+      - R run/patient_card.R --site eicu_demo --profiles --draws 400 --seed 1 --terms-signal resp_rate,heart_rate --qc-run {gam_qc}
+    cited: [card_20261028T191715, card_20261028T120452]
+    note: the openly licensed eICU-CRD demo (config/external_demo.yml)
+  - id: lambda_binom_check
+    tier: core
+    needs: [internal]
+    prefix: lambdabinom
+    run:
+      - R tests/lambda_binom_check.R
+    cited: [lambdabinom_20261101T134750]
+  - id: rv_assumptions
+    tier: core
+    prefix: rvassume
+    run:
+      - R tests/rv_assumptions_summary.R --internal {internal} --external {external}
+    cited: [rvassume_20261101T115309]
+
+  # ---------------------------------------------------------------- comparators
+  - id: ebm_export
+    tier: comparators
+    needs: [internal]
+    run:
+      - R tests/ebm_export.R
+    note: writes out/cache/ebm
+  - id: ebm_fit
+    tier: comparators
+    needs: [ebm_export]
+    run:
+      - python python/ebm_fit.py --seed 5333
+  - id: ebm_fit_additive
+    tier: comparators
+    needs: [ebm_export]
+    run:
+      - python python/ebm_fit.py --seed 5333 --additive
+  - id: ebm_score
+    tier: comparators
+    needs: [ebm_fit]
+    prefix: ebm
+    run:
+      - R tests/ebm_score.R --internal {internal} --external {external} --test-run {test}
+    cited: [ebm_20261028T224038]
+  - id: ebm_score_test
+    tier: comparators
+    needs: [ebm_fit]
+    prefix: ebmtest
+    run:
+      - R tests/ebm_score.R --test --internal {internal} --external {external} --test-run {test}
+    cited: [ebmtest_20261028T224126]
+  - id: ebmadd_score
+    tier: comparators
+    needs: [ebm_fit_additive]
+    prefix: ebmadd
+    run:
+      - R tests/ebm_score.R --additive --internal {internal} --external {external} --test-run {test}
+    cited: [ebmadd_20261028T234749]
+  - id: ebmadd_score_test
+    tier: comparators
+    needs: [ebm_fit_additive]
+    prefix: ebmaddtest
+    run:
+      - R tests/ebm_score.R --additive --test --internal {internal} --external {external} --test-run {test}
+    cited: [ebmaddtest_20261028T234803]
+  - id: jointgam_check
+    tier: comparators
+    needs: [internal, ebm_export]
+    run:
+      - openblas tests/jointgam.R --check
+  - id: jointgam_single
+    tier: comparators
+    needs: [internal, ebm_export]
+    run:
+      - openblas tests/jointgam.R --single
+    note: machinery control, out/cache/jointgam/single
+  - id: jointgam_gated
+    tier: comparators
+    needs: [internal, ebm_export]
+    run:
+      - openblas tests/jointgam.R
+    note: out/cache/jointgam/gated
+  - id: jointgam_ungated
+    tier: comparators
+    needs: [internal, ebm_export]
+    run:
+      - openblas tests/jointgam.R --ungated
+    note: out/cache/jointgam/ungated
+  - id: jgamgated_score
+    tier: comparators
+    needs: [jointgam_gated]
+    prefix: jgamgated
+    run:
+      - R tests/ebm_score.R --jointgam gated --internal {internal} --external {external} --test-run {test}
+    cited: [jgamgated_20261030T151327]
+  - id: jgamgated_score_test
+    tier: comparators
+    needs: [jointgam_gated]
+    prefix: jgamgatedtest
+    run:
+      - R tests/ebm_score.R --jointgam gated --test --internal {internal} --external {external} --test-run {test}
+    cited: [jgamgatedtest_20261030T151338]
+  - id: jgamungated_score
+    tier: comparators
+    needs: [jointgam_ungated]
+    prefix: jgamungated
+    run:
+      - R tests/ebm_score.R --jointgam ungated --internal {internal} --external {external} --test-run {test}
+    cited: [jgamungated_20261030T150052]
+  - id: jgamungated_score_test
+    tier: comparators
+    needs: [jointgam_ungated]
+    prefix: jgamungatedtest
+    run:
+      - R tests/ebm_score.R --jointgam ungated --test --internal {internal} --external {external} --test-run {test}
+    cited: [jgamungatedtest_20261030T150101]
+  - id: ebm_strata_bins
+    tier: comparators
+    prefix: ebmbins
+    run:
+      - R tests/ebm_strata_bins.R --ebm {ebm_score} --ebmtest {ebm_score_test} --ebmadd {ebmadd_score} --ebmaddtest {ebmadd_score_test} --jointgam-gated {jgamgated_score},{jgamgated_score_test} --jointgam-ungated {jgamungated_score},{jgamungated_score_test}
+    cited: [ebmbins_20261030T151631]
+  - id: strata
+    tier: comparators
+    prefix: strata
+    run:
+      - R tests/strata_reporting.R --internal {internal} --test {test} --external {external} --ebm-bins {ebm_strata_bins}
+    cited: [strata_20261030T151638]
+  - id: comparator_calibration
+    tier: comparators
+    prefix: compcal
+    run:
+      - R tests/comparator_calibration.R --internal {internal} --test {test} --external {external} --jgamgated {jgamgated_score} --jgamgatedtest {jgamgated_score_test} --jgamungated {jgamungated_score} --jgamungatedtest {jgamungated_score_test} --ebmadd {ebmadd_score} --ebmaddtest {ebmadd_score_test} --ebm {ebm_score} --ebmtest {ebm_score_test}
+    cited: [compcal_20261101T075957]
+  - id: centered_strata
+    tier: comparators
+    prefix: centstrata
+    run:
+      - R tests/score_centered_strata.R --internal {internal} --test {test} --external {external}
+    cited: [centstrata_20261030T201358]
+  - id: jointgam_copies
+    tier: comparators
+    needs: [ebm_export, jointgam_gated]
+    prefix: jgamcopies
+    run:
+      - openblas tests/jointgam_copies.R --verify
+      - openblas tests/jointgam_copies.R
+      - R tests/jointgam_copies.R --summarise --ebmbins {ebm_strata_bins}
+    cited: [jgamcopies_20261030T205259]
+  - id: jointgam_shape
+    tier: comparators
+    needs: [internal, fig_anchor_n, fig_anchored_curves, jointgam_single, jointgam_gated]
+    prefix: jgamshape
+    run:
+      - R tests/jointgam_shape_compare.R
+    cited: [jgamshape_20261030T142353]
+  - id: jointgam_redundancy
+    tier: comparators
+    needs: [internal]
+    prefix: jgamredund
+    run:
+      - R tests/jointgam_redundancy.R {jointgam_shape}
+    cited: [jgamredund_20261030T145610]
+  - id: jointgam_atlas
+    tier: comparators
+    needs: [fig_coefs, internal, fig_anchored_curves, jointgam_gated]
+    prefix: jgamatlas
+    run:
+      - R tests/jointgam_atlas.R
+    cited: [jgamatlas_20261030T151337]
+    note: also draws paper/figs/jgam_atlas.pdf
+
+  # ---------------------------------------------------------------- heterogeneity and missingness
+  - id: stay_table
+    tier: heterogeneity
+    prefix: staytab
+    run:
+      - R tests/stay_table.R --internal {internal} --external {external} --external2 {external}
+    cited: [staytab_20261027T215332]
+    note: check 5 compares two eICU runs; a chain has one, so it is passed twice and the check is trivially met
+  - id: missing
+    tier: heterogeneity
+    prefix: missing
+    run:
+      - R tests/missing_subgroups.R --staytab {stay_table}
+    cited: [missing_20261029T092729]
+  - id: hetero_assemble
+    tier: heterogeneity
+    prefix: heteroasm
+    run:
+      - R tests/hetero_assemble.R --staytab {stay_table}
+    cited: [heteroasm_20261027T233748]
+  - id: oof_terms
+    tier: heterogeneity
+    prefix: oofterms
+    run:
+      - R tests/hetero_oof_terms.R --staytab {stay_table}
+    cited: [oofterms_20261028T134954]
+    note: fold refits (CLAUDE.md rule 7 exception); cache out/cache/oofterms
+  - id: flags_mimic
+    tier: heterogeneity
+    prefix: heteroflags
+    run:
+      - R tests/hetero_card_flags.R --site mimic_oof --stage1 {hetero_assemble} --terms {oof_terms} --card {card}
+    cited: [heteroflags_20261030T204724]
+  - id: flags_eicu
+    tier: heterogeneity
+    prefix: heteroflags
+    run:
+      - R tests/hetero_card_flags.R --site eicu --stage1 {hetero_assemble} --terms {oof_terms} --card {card} --expect {flags_mimic}
+    cited: [heteroflags_20261030T204938]
+  - id: bold_vs_score
+    tier: heterogeneity
+    prefix: heteroboldscore
+    run:
+      - R tests/hetero_bold_vs_score.R --mimic {flags_mimic} --eicu {flags_eicu}
+    cited: [heteroboldscore_20261101T115051]
+  - id: quartile_lift
+    tier: heterogeneity
+    prefix: heteroquartlift
+    run:
+      - R tests/hetero_quartile_lift.R --mimic {flags_mimic} --eicu {flags_eicu} --boldscore {bold_vs_score}
+    cited: [heteroquartlift_20261111T164027]
+  - id: strata_decomposition
+    tier: heterogeneity
+    prefix: stratadecomp
+    run:
+      - R tests/strata_auroc_decomposition.R --stage1 {hetero_assemble} --internal {internal} --external {external}
+    cited: [stratadecomp_20261111T184841]
+
+  # ---------------------------------------------------------------- reproducibility (about ten hours)
+  - id: attr_check_specs
+    tier: reproducibility
+    needs: [internal]
+    run:
+      - R tests/attr_replicates.R --check-specs
+    note: CLAUDE.md requires this before the generator
+  - id: attrgen
+    tier: reproducibility
+    needs: [internal]
+    prefix: attrgen
+    run:
+      - R tests/attr_replicates.R --levels spec,seed,sample
+    configs:
+      - {file: config/gam_qc.yml, key: attrgen, value: "{attrgen}"}
+    cited: [attrgen_20260909T115047]
+    note: the fitting generator; after an interruption, resume it by hand with --resume {attrgen}
+  - id: attr_metrics
+    tier: reproducibility
+    prefix: attrmetrics
+    run:
+      - R tests/attr_metrics.R {attrgen}
+    cited: [attrmetrics_20260909T165755]
+  - id: attr_bands
+    tier: reproducibility
+    prefix: attrbands
+    run:
+      - R tests/attr_bands.R --store {attrgen}
+  - id: attr_external
+    tier: reproducibility
+    prefix: attrext
+    run:
+      - R tests/attr_external.R --mimic {attr_metrics}
+    cited: [attrext_20260909T175854]
+  - id: attrextgen
+    tier: reproducibility
+    prefix: attrextgen
+    run:
+      - R tests/attr_external_bags.R --internal {attrgen}
+    cited: [attrextgen_20261006T082355]
+  - id: attr_metrics_eicu
+    tier: reproducibility
+    prefix: attrmetricsext
+    run:
+      - R tests/attr_metrics.R --site eicu {attrextgen}
+    cited: [attrmetricsext_20261006T121114]
+  - id: attr_bold_mimic
+    tier: reproducibility
+    prefix: attrbold
+    run:
+      - R tests/attr_bold_agreement.R {attrgen}
+  - id: attr_bold_eicu
+    tier: reproducibility
+    prefix: attrboldext
+    run:
+      - R tests/attr_bold_agreement.R --site eicu {attrextgen}
+    cited: [attrboldext_20261028T215001]
+  - id: boldvals_eicu
+    tier: reproducibility
+    needs: [fig_anchor_n]
+    prefix: boldvalsext
+    run:
+      - R tests/bold_values_replicates.R --site eicu --terms {oof_terms} --store {attrextgen} --heteroflags {flags_eicu}
+      - R tests/bold_values_replicates.R --site eicu --terms {oof_terms} --store {attrextgen} --heteroflags {flags_eicu} --assemble
+    cited: [boldvalsext_20261028T231235]
+    note: the cited run predates the singular-tail fix (inventory D7); a rerun may differ slightly from it
+  - id: stabgen
+    tier: reproducibility
+    prefix: stabgen
+    run:
+      - R tests/stab_ladder_gen.R --init --attrgen {attrgen} --attrextgen {attrextgen} --test {test}
+      - R tests/stab_ladder_gen.R --store {stabgen} --arm score
+      - R tests/stab_ladder_gen.R --store {stabgen} --arm shap
+      - openblas tests/stab_ladder_gen.R --store {stabgen} --arm jgam_gated
+      - openblas tests/stab_ladder_gen.R --store {stabgen} --arm jgam_ungated
+      - R tests/stab_ladder_gen.R --store {stabgen} --close
+    cited: [stabgen_20261030T153227]
+    note: --init records its three inputs in the store; the arm and close passes read them from there
+  - id: stab_metrics
+    tier: reproducibility
+    prefix: stabmetrics
+    run:
+      - R tests/stab_ladder_metrics.R {stabgen}
+    cited: [stabmetrics_20261030T190010]
+  - id: stab_strata
+    tier: reproducibility
+    prefix: stabstrata
+    run:
+      - R tests/stab_ladder_strata.R --store {stabgen} --arm score
+      - R tests/stab_ladder_strata.R --store {stabgen} --arm shap
+      - R tests/stab_ladder_strata.R --store {stabgen} --arm jgam_gated
+      - R tests/stab_ladder_strata.R --store {stabgen} --arm jgam_ungated
+      - R tests/stab_ladder_strata.R --store {stabgen} --summarise
+    cited: [stabstrata_20261030T195855]
+  - id: stab_card
+    tier: reproducibility
+    needs: [fig_anchor_n]
+    prefix: stabcard
+    run:
+      - R tests/stab_card_marks.R --store {stabgen} --attrboldext {attr_bold_eicu}
+      - R tests/stab_card_marks.R --store {stabgen} --attrboldext {attr_bold_eicu} --assemble
+    cited: [stabcard_20261031T225804]
+
+  # ---------------------------------------------------------------- figures and tables (paper/figs)
+  - id: fig_atlas
+    tier: figures
+    needs: [fig_coefs, fig_anchored_curves]
+    run:
+      - R paper/make_atlas.R --gamqc {gam_qc}
+  - id: fig_strata
+    tier: figures
+    run:
+      - R paper/make_strata_figure.R --internal {internal} --test {test} --external {external}
+  - id: fig_results
+    tier: figures
+    run:
+      - R paper/make_results_figures.R --internal {internal} --test {test} --external {external} --jgamgated {jgamgated_score} --jgamgatedtest {jgamgated_score_test} --jgamungated {jgamungated_score} --jgamungatedtest {jgamungated_score_test} --ebmadd {ebmadd_score} --ebmaddtest {ebmadd_score_test} --ebm {ebm_score} --ebmtest {ebm_score_test} --strata {strata} --stabstrata {stab_strata} --stabmetrics {stab_metrics} --chansem {channel_semantics}
+  - id: fig_ladder
+    tier: figures
+    run:
+      - R paper/make_ladder_figure.R {strata} {stab_metrics} {stab_strata}
+  - id: fig_flattening
+    tier: figures
+    needs: [fig_anchored_curves]
+    run:
+      - R paper/make_flattening_figure.R --jgamredund {jointgam_redundancy} --jgamshape {jointgam_shape}
+  - id: fig_sodium
+    tier: figures
+    needs: [internal, fig_anchored_curves]
+    run:
+      - R paper/make_sodium_draws_figure.R
+  - id: fig_card
+    tier: figures
+    needs: [fig_coefs, fig_anchored_curves]
+    run:
+      - R paper/make_card_figure.R {card} --gamqc {gam_qc}
+  - id: tab_withinclass
+    tier: figures
+    run:
+      - R paper/make_withinclass_table.R {channel_semantics}
+  - id: tab_prior_dominance
+    tier: figures
+    needs: [internal]
+    run:
+      - R paper/make_prior_dominance.R
